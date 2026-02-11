@@ -12,8 +12,12 @@ LINE_CHANNEL_SECRET = "49ee8607970925e94bccb13679c435c6"
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-@app.route("/callback", methods=["POST"])
+@app.route("/callback", methods=["POST", "GET"])
 def callback():
+    # 讓 Verify 可以成功
+    if request.method == "GET":
+        return "OK"
+
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
 
@@ -23,6 +27,7 @@ def callback():
         abort(400)
 
     return "OK"
+
 
 # 🔥 這裡就是「回傳文字」的地方
 @handler.add(MessageEvent, message=TextMessage)
