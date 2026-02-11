@@ -21,24 +21,35 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
+
 def get_sheet_data():
-    credentials_info = json.loads(GOOGLE_CREDENTIALS)
+    # 防呆：如果沒設環境變數就不讀
+    if not GOOGLE_CREDENTIALS or not GOOGLE_SHEET_ID:
+        print("❌ Google 環境變數未設定")
+        return []
 
-    credentials = service_account.Credentials.from_service_account_info(
-        credentials_info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    )
+    try:
+        credentials_info = json.loads(GOOGLE_CREDENTIALS)
 
-    service = build("sheets", "v4", credentials=credentials)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        )
 
-    sheet = service.spreadsheets()
-    result = sheet.values().get(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        range="A:B"
-    ).execute()
+        service = build("sheets", "v4", credentials=credentials)
 
-    values = result.get("values", [])
-    return values
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range="A:B"
+        ).execute()
+
+        values = result.get("values", [])
+        return values
+
+    except Exception as e:
+        print("❌ 讀取 Google Sheet 失敗:", e)
+        return []
 
 
 @app.route("/callback", methods=["POST", "GET"])
@@ -63,21 +74,21 @@ def handle_message(event):
 
     sheet_data = get_sheet_data()
 
-    reply_text = "抱歉，目前沒有這個關鍵字 😅"
-
+    # 🔥 有命中才回，沒有就不回
     for row in sheet_data[1:]:  # 跳過標題列
         if len(row) >= 2:
             keyword = row[0].strip()
             reply = row[1].strip()
 
-            if keyword in user_text:
-                reply_text = reply
-                break
+            if keyword and keyword in user_text:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=reply)
+                )
+                return  # 命中就結束
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply_text)
-    )
+    # ❌ 沒命中 → 什麼都不做
+    return
 
 
 if __name__ == "__main__":
