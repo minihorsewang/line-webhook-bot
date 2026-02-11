@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -6,16 +7,28 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 app = Flask(__name__)
 
-# 🔐 從 Render 環境變數讀取
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+# 🔥 讀取 Excel 關鍵字
+def load_keywords():
+    df = pd.read_excel("keywords.xlsx")
+    keyword_dict = {}
+
+    for index, row in df.iterrows():
+        keyword = str(row["keyword"])
+        reply = str(row["reply"])
+        keyword_dict[keyword] = reply
+
+    return keyword_dict
+
+
 @app.route("/callback", methods=["POST", "GET"])
 def callback():
-    # 讓 Verify 可以成功
+
     if request.method == "GET":
         return "OK"
 
@@ -29,15 +42,25 @@ def callback():
 
     return "OK"
 
-# 🔥 自動回覆
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_text = event.message.text
 
+    keyword_dict = load_keywords()
+
+    reply_text = "不好意思，目前沒有相關資訊。"
+
+    for keyword, reply in keyword_dict.items():
+        if keyword in user_text:
+            reply_text = reply
+            break
+
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text=f"我收到你的訊息：{user_text}")
+        TextSendMessage(text=reply_text)
     )
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
