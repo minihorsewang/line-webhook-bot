@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -22,34 +23,60 @@ GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
 
-def get_sheet_data():
-    # 防呆：如果沒設環境變數就不讀
-    if not GOOGLE_CREDENTIALS or not GOOGLE_SHEET_ID:
-        print("❌ Google 環境變數未設定")
-        return []
+def get_service():
+    credentials_info = json.loads(GOOGLE_CREDENTIALS)
 
-    try:
-        credentials_info = json.loads(GOOGLE_CREDENTIALS)
+    credentials = service_account.Credentials.from_service_account_info(
+        credentials_info,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    )
 
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_info,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        )
+    service = build("sheets", "v4", credentials=credentials)
+    return service
 
-        service = build("sheets", "v4", credentials=credentials)
 
-        sheet = service.spreadsheets()
-        result = sheet.values().get(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range="A:B"
-        ).execute()
+def get_keyword_rules():
+    service = get_service()
 
-        values = result.get("values", [])
-        return values
+    result = service.spreadsheets().values().get(
+        spreadsheetId=GOOGLE_SHEET_ID,
+        range="Sheet1!A:C"
+    ).execute()
 
-    except Exception as e:
-        print("❌ 讀取 Google Sheet 失敗:", e)
-        return []
+    values = result.get("values", [])
+
+    rules = []
+
+    for row in values[1:]:
+        if len(row) >= 3:
+            priority = int(row[0])
+            keywords = [k.strip() for k in row[1].split(",")]
+            reply = row[2]
+
+            rules.append({
+                "priority": priority,
+                "keywords": keywords,
+                "reply": reply
+            })
+
+    # 按 priority 排序
+    rules.sort(key=lambda x: x["priority"])
+    return rules
+
+
+def log_unmatched(user_id, message):
+    service = get_service()
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    service.spreadsheets().values().append(
+        spreadsheetId=GOOGLE_SHEET_ID,
+        range="Sheet2!A:C",
+        valueInputOption="USER_ENTERED",
+        body={
+            "values": [[now, user_id, message]]
+        }
+    ).execute()
 
 
 @app.route("/callback", methods=["POST", "GET"])
@@ -71,23 +98,23 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_text = event.message.text.strip()
+    user_id = event.source.user_id
 
-    sheet_data = get_sheet_data()
+    rules = get_keyword_rules()
 
-    # 🔥 有命中才回，沒有就不回
-    for row in sheet_data[1:]:  # 跳過標題列
-        if len(row) >= 2:
-            keyword = row[0].strip()
-            reply = row[1].strip()
-
-            if keyword and keyword in user_text:
+    for rule in rules:
+        for keyword in rule["keywords"]:
+            if keyword in user_text:
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(text=reply)
+                    TextSendMessage(text=rule["reply"])
                 )
-                return  # 命中就結束
+                return
 
-    # ❌ 沒命中 → 什麼都不做
+    # 沒命中 → 記錄
+    log_unmatched(user_id, user_text)
+
+    # 不回覆
     return
 
 
