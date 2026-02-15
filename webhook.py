@@ -35,7 +35,7 @@ def get_service():
     return service
 
 
-ddef get_keyword_rules():
+def get_keyword_rules():
     service = get_service()
 
     result = service.spreadsheets().values().get(
