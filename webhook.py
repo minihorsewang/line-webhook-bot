@@ -106,22 +106,21 @@ def handle_message(event):
     rules = get_keyword_rules()
 
     for rule in rules:
-        for keyword in rule["keywords"]:
-            keyword = keyword.strip().lower()
+        keywords = [k.strip().lower() for k in rule["keywords"] if k.strip()]
 
-            # 🔥 模糊包含判斷
-            if keyword and keyword in user_text:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=rule["reply"])
-                )
-                return
+        # 🔥 AND 判斷模式
+        if all(keyword in user_text for keyword in keywords):
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=rule["reply"])
+            )
+            return
 
     # 沒命中 → 記錄
     log_unmatched(user_id, user_text)
 
-    # 不回覆
     return
+
 
 
 
