@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -11,32 +12,40 @@ from googleapiclient.discovery import build
 
 app = Flask(__name__)
 
-# ===== LINE 設定 =====
+# =========================
+# LINE 設定
+# =========================
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# ===== Google Sheets 設定 =====
+# =========================
+# Google Sheets 初始化（只跑一次）
+# =========================
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
+credentials_info = json.loads(GOOGLE_CREDENTIALS)
 
-def get_service():
-    credentials_info = json.loads(GOOGLE_CREDENTIALS)
+credentials = service_account.Credentials.from_service_account_info(
+    credentials_info,
+    scopes=["https://www.googleapis.com/auth/spreadsheets"]
+)
 
-    credentials = service_account.Credentials.from_service_account_info(
-        credentials_info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
-    )
+service = build("sheets", "v4", credentials=credentials)
 
-    service = build("sheets", "v4", credentials=credentials)
-    return service
+# =========================
+# 關鍵字快取機制
+# =========================
+keyword_cache = []
+last_refresh_time = 0
+CACHE_SECONDS = 60  # 每 60 秒更新一次
 
 
-def get_keyword_rules():
-    service = get_service()
+def refresh_keyword_rules():
+    global keyword_cache, last_refresh_time
 
     result = service.spreadsheets().values().get(
         spreadsheetId=GOOGLE_SHEET_ID,
@@ -66,13 +75,25 @@ def get_keyword_rules():
             })
 
     rules.sort(key=lambda x: x["priority"])
-    return rules
+
+    keyword_cache = rules
+    last_refresh_time = time.time()
 
 
+def get_keyword_rules():
+    global last_refresh_time
 
+    # 如果超過 CACHE_SECONDS 才重新抓
+    if time.time() - last_refresh_time > CACHE_SECONDS:
+        refresh_keyword_rules()
+
+    return keyword_cache
+
+
+# =========================
+# 未命中紀錄
+# =========================
 def log_unmatched(user_id, message):
-    service = get_service()
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     service.spreadsheets().values().append(
@@ -85,6 +106,9 @@ def log_unmatched(user_id, message):
     ).execute()
 
 
+# =========================
+# Webhook
+# =========================
 @app.route("/callback", methods=["POST", "GET"])
 def callback():
     if request.method == "GET":
@@ -107,7 +131,7 @@ def handle_message(event):
     user_id = event.source.user_id
 
     rules = get_keyword_rules()
-    print(rules)
+
     for rule in rules:
 
         # ===== AND 條件 =====
@@ -132,7 +156,7 @@ def handle_message(event):
         if any_keywords:
             any_match = any(k in user_text for k in any_keywords)
 
-        # ===== 最終判斷 =====
+        # ===== 判斷 =====
         if must_keywords and any_keywords:
             if must_match and any_match:
                 line_bot_api.reply_message(
@@ -161,7 +185,8 @@ def handle_message(event):
     log_unmatched(user_id, user_text)
 
 
-
+# 啟動時先載入一次
+refresh_keyword_rules()
 
 
 if __name__ == "__main__":
