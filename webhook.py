@@ -35,12 +35,12 @@ def get_service():
     return service
 
 
-def get_keyword_rules():
+ddef get_keyword_rules():
     service = get_service()
 
     result = service.spreadsheets().values().get(
         spreadsheetId=GOOGLE_SHEET_ID,
-        range="Sheet1!A:C"
+        range="Sheet1!A:D"
     ).execute()
 
     values = result.get("values", [])
@@ -48,23 +48,26 @@ def get_keyword_rules():
     rules = []
 
     for row in values[1:]:
-        if len(row) >= 3:
+        if len(row) >= 4:
             try:
-                 priority = int(row[0])
+                priority = int(row[0])
             except:
-                 priority = 999
-            keywords = [k.strip() for k in row[1].split(",")]
-            reply = row[2]
+                priority = 999
+
+            must_include = row[1] if len(row) > 1 else ""
+            any_include = row[2] if len(row) > 2 else ""
+            reply = row[3]
 
             rules.append({
                 "priority": priority,
-                "keywords": keywords,
+                "must": must_include,
+                "any": any_include,
                 "reply": reply
             })
 
-    # 按 priority 排序
     rules.sort(key=lambda x: x["priority"])
     return rules
+
 
 
 def log_unmatched(user_id, message):
@@ -106,20 +109,57 @@ def handle_message(event):
     rules = get_keyword_rules()
 
     for rule in rules:
-        keywords = [k.strip().lower() for k in rule["keywords"] if k.strip()]
 
-        # 🔥 AND 判斷模式
-        if all(keyword in user_text for keyword in keywords):
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=rule["reply"])
-            )
-            return
+        # ===== AND 條件 =====
+        must_keywords = [
+            k.strip().lower()
+            for k in rule["must"].split("&")
+            if k.strip()
+        ]
+
+        must_match = True
+        if must_keywords:
+            must_match = all(k in user_text for k in must_keywords)
+
+        # ===== OR 條件 =====
+        any_keywords = [
+            k.strip().lower()
+            for k in rule["any"].split("|")
+            if k.strip()
+        ]
+
+        any_match = False
+        if any_keywords:
+            any_match = any(k in user_text for k in any_keywords)
+
+        # ===== 最終判斷 =====
+        if must_keywords and any_keywords:
+            if must_match and any_match:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=rule["reply"])
+                )
+                return
+
+        elif must_keywords:
+            if must_match:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=rule["reply"])
+                )
+                return
+
+        elif any_keywords:
+            if any_match:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=rule["reply"])
+                )
+                return
 
     # 沒命中 → 記錄
     log_unmatched(user_id, user_text)
 
-    return
 
 
 
