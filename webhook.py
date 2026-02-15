@@ -107,7 +107,7 @@ def handle_message(event):
     user_id = event.source.user_id
 
     rules = get_keyword_rules()
-
+    print(rules)
     for rule in rules:
 
         # ===== AND 條件 =====
