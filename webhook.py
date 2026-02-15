@@ -49,7 +49,10 @@ def get_keyword_rules():
 
     for row in values[1:]:
         if len(row) >= 3:
-            priority = int(row[0])
+            try:
+                 priority = int(row[0])
+            except:
+                 priority = 999
             keywords = [k.strip() for k in row[1].split(",")]
             reply = row[2]
 
@@ -97,14 +100,17 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    user_text = event.message.text.strip()
+    user_text = event.message.text.strip().lower()
     user_id = event.source.user_id
 
     rules = get_keyword_rules()
 
     for rule in rules:
         for keyword in rule["keywords"]:
-            if keyword in user_text:
+            keyword = keyword.strip().lower()
+
+            # 🔥 模糊包含判斷
+            if keyword and keyword in user_text:
                 line_bot_api.reply_message(
                     event.reply_token,
                     TextSendMessage(text=rule["reply"])
@@ -116,6 +122,7 @@ def handle_message(event):
 
     # 不回覆
     return
+
 
 
 if __name__ == "__main__":
