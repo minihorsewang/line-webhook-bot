@@ -139,27 +139,27 @@ def callback():
     line_bot_api = LineBotApi(token)
 
     for event in events:
-    if event.type == "message" and event.message.type == "text":
+        if event.type == "message" and event.message.type == "text":
 
-        user_text = event.message.text
-        user_id = event.source.user_id
+            user_text = event.message.text
+            user_id = event.source.user_id
 
-        rules = get_rules(sheet)
-        reply = match_rules(user_text, rules)
+            rules = get_rules(sheet)
+            reply = match_rules(user_text, rules)
 
-        # ===== 不管命不命中都記錄 =====
-        matched = "是" if reply else "否"
+            # ===== 不管命不命中都記錄 =====
+            matched = "是" if reply else "否"
 
-        service.spreadsheets().values().append(
-            spreadsheetId=sheet,
-            range="Sheet2!A:D",
-            valueInputOption="USER_ENTERED",
-            body={
-                "values": [[
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    user_id,
-                    user_text,
-                    matched
+            service.spreadsheets().values().append(
+                spreadsheetId=sheet,
+                range="Sheet2!A:D",
+                valueInputOption="USER_ENTERED",
+                body={
+                    "values": [[
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        user_id,
+                        user_text,
+                        matched
                 ]]
             }
         ).execute()
