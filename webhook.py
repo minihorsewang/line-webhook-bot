@@ -6,27 +6,27 @@ from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 app = Flask(__name__)
 
-# =========================
-# LINE 設定
-# =========================
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
-
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
-
-# =========================
-# Google Sheets 初始化（只跑一次）
-# =========================
+# =========================================
+# 環境變數
+# =========================================
 GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
-GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID")
 
+LINE1_SECRET = os.environ.get("LINE1_CHANNEL_SECRET")
+LINE1_TOKEN = os.environ.get("LINE1_CHANNEL_ACCESS_TOKEN")
+LINE1_SHEET = os.environ.get("LINE1_SHEET_ID")
+
+LINE2_SECRET = os.environ.get("LINE2_CHANNEL_SECRET")
+LINE2_TOKEN = os.environ.get("LINE2_CHANNEL_ACCESS_TOKEN")
+LINE2_SHEET = os.environ.get("LINE2_SHEET_ID")
+
+# =========================================
+# Google 初始化（只跑一次）
+# =========================================
 credentials_info = json.loads(GOOGLE_CREDENTIALS)
 
 credentials = service_account.Credentials.from_service_account_info(
@@ -36,24 +36,20 @@ credentials = service_account.Credentials.from_service_account_info(
 
 service = build("sheets", "v4", credentials=credentials)
 
-# =========================
-# 關鍵字快取機制
-# =========================
-keyword_cache = []
-last_refresh_time = 0
-CACHE_SECONDS = 60  # 每 60 秒更新一次
+# =========================================
+# 快取機制（每個 Sheet 各自快取）
+# =========================================
+CACHE_SECONDS = 60
+sheet_cache = {}  # {sheet_id: {"rules": [], "time": timestamp}}
 
 
-def refresh_keyword_rules():
-    global keyword_cache, last_refresh_time
-
+def refresh_rules(sheet_id):
     result = service.spreadsheets().values().get(
-        spreadsheetId=GOOGLE_SHEET_ID,
+        spreadsheetId=sheet_id,
         range="Sheet1!A:D"
     ).execute()
 
     values = result.get("values", [])
-
     rules = []
 
     for row in values[1:]:
@@ -63,41 +59,39 @@ def refresh_keyword_rules():
             except:
                 priority = 999
 
-            must_include = row[1] if len(row) > 1 else ""
-            any_include = row[2] if len(row) > 2 else ""
-            reply = row[3]
-
             rules.append({
                 "priority": priority,
-                "must": must_include,
-                "any": any_include,
-                "reply": reply
+                "must": row[1] if len(row) > 1 else "",
+                "any": row[2] if len(row) > 2 else "",
+                "reply": row[3]
             })
 
     rules.sort(key=lambda x: x["priority"])
 
-    keyword_cache = rules
-    last_refresh_time = time.time()
+    sheet_cache[sheet_id] = {
+        "rules": rules,
+        "time": time.time()
+    }
 
 
-def get_keyword_rules():
-    global last_refresh_time
+def get_rules(sheet_id):
+    if (
+        sheet_id not in sheet_cache
+        or time.time() - sheet_cache[sheet_id]["time"] > CACHE_SECONDS
+    ):
+        refresh_rules(sheet_id)
 
-    # 如果超過 CACHE_SECONDS 才重新抓
-    if time.time() - last_refresh_time > CACHE_SECONDS:
-        refresh_keyword_rules()
-
-    return keyword_cache
+    return sheet_cache[sheet_id]["rules"]
 
 
-# =========================
+# =========================================
 # 未命中紀錄
-# =========================
-def log_unmatched(user_id, message):
+# =========================================
+def log_unmatched(sheet_id, user_id, message):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     service.spreadsheets().values().append(
-        spreadsheetId=GOOGLE_SHEET_ID,
+        spreadsheetId=sheet_id,
         range="Sheet2!A:C",
         valueInputOption="USER_ENTERED",
         body={
@@ -106,87 +100,97 @@ def log_unmatched(user_id, message):
     ).execute()
 
 
-# =========================
-# Webhook
-# =========================
-@app.route("/callback", methods=["POST", "GET"])
-def callback():
-    if request.method == "GET":
-        return "OK"
-
-    signature = request.headers.get("X-Line-Signature")
-    body = request.get_data(as_text=True)
-
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-
-    return "OK"
-
-
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
-    user_text = event.message.text.strip().lower()
-    user_id = event.source.user_id
-
-    rules = get_keyword_rules()
+# =========================================
+# 關鍵字比對
+# =========================================
+def match_rules(user_text, rules):
+    user_text = user_text.lower()
 
     for rule in rules:
 
-        # ===== AND 條件 =====
         must_keywords = [
             k.strip().lower()
             for k in rule["must"].split("&")
             if k.strip()
         ]
 
-        must_match = True
-        if must_keywords:
-            must_match = all(k in user_text for k in must_keywords)
-
-        # ===== OR 條件 =====
         any_keywords = [
             k.strip().lower()
             for k in rule["any"].split("|")
             if k.strip()
         ]
 
-        any_match = False
-        if any_keywords:
-            any_match = any(k in user_text for k in any_keywords)
+        must_match = all(k in user_text for k in must_keywords) if must_keywords else False
+        any_match = any(k in user_text for k in any_keywords) if any_keywords else False
 
-        # ===== 判斷 =====
         if must_keywords and any_keywords:
             if must_match and any_match:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=rule["reply"])
-                )
-                return
+                return rule["reply"]
 
         elif must_keywords:
             if must_match:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=rule["reply"])
-                )
-                return
+                return rule["reply"]
 
         elif any_keywords:
             if any_match:
+                return rule["reply"]
+
+    return None
+
+
+# =========================================
+# Webhook
+# =========================================
+@app.route("/callback", methods=["POST"])
+def callback():
+
+    signature = request.headers.get("X-Line-Signature")
+    body = request.get_data(as_text=True)
+
+    # 判斷是哪個 OA
+    current_secret = None
+    current_token = None
+    current_sheet = None
+    handler = None
+
+    try:
+        handler = WebhookHandler(LINE1_SECRET)
+        handler.handle(body, signature)
+        current_secret = LINE1_SECRET
+        current_token = LINE1_TOKEN
+        current_sheet = LINE1_SHEET
+    except:
+        try:
+            handler = WebhookHandler(LINE2_SECRET)
+            handler.handle(body, signature)
+            current_secret = LINE2_SECRET
+            current_token = LINE2_TOKEN
+            current_sheet = LINE2_SHEET
+        except:
+            abort(400)
+
+    events = json.loads(body)["events"]
+
+    for event in events:
+
+        if event["type"] == "message" and event["message"]["type"] == "text":
+
+            user_text = event["message"]["text"]
+            user_id = event["source"]["userId"]
+
+            rules = get_rules(current_sheet)
+            reply = match_rules(user_text, rules)
+
+            if reply:
+                line_bot_api = LineBotApi(current_token)
                 line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text=rule["reply"])
+                    event["replyToken"],
+                    TextSendMessage(text=reply)
                 )
-                return
+            else:
+                log_unmatched(current_sheet, user_id, user_text)
 
-    # 沒命中 → 記錄
-    log_unmatched(user_id, user_text)
-
-
-# 啟動時先載入一次
-refresh_keyword_rules()
+    return "OK"
 
 
 if __name__ == "__main__":
