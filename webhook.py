@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import TextSendMessage
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -42,7 +42,6 @@ service = build("sheets", "v4", credentials=credentials)
 CACHE_SECONDS = 60
 sheet_cache = {}  # {sheet_id: {"rules": [], "time": timestamp}}
 
-
 def refresh_rules(sheet_id):
     result = service.spreadsheets().values().get(
         spreadsheetId=sheet_id,
@@ -73,7 +72,6 @@ def refresh_rules(sheet_id):
         "time": time.time()
     }
 
-
 def get_rules(sheet_id):
     if (
         sheet_id not in sheet_cache
@@ -82,7 +80,6 @@ def get_rules(sheet_id):
         refresh_rules(sheet_id)
 
     return sheet_cache[sheet_id]["rules"]
-
 
 # =========================================
 # 未命中紀錄
@@ -98,7 +95,6 @@ def log_unmatched(sheet_id, user_id, message):
             "values": [[now, user_id, message]]
         }
     ).execute()
-
 
 # =========================================
 # 關鍵字比對
@@ -137,7 +133,6 @@ def match_rules(user_text, rules):
 
     return None
 
-
 # =========================================
 # Webhook
 # =========================================
@@ -147,32 +142,22 @@ def callback():
     signature = request.headers.get("X-Line-Signature")
     body = request.get_data(as_text=True)
 
-    # 判斷是哪個 OA
-    current_secret = None
-    current_token = None
-    current_sheet = None
-    handler = None
-
+    # 先驗證是哪個 OA（只做驗證，不執行 handler）
     try:
-        handler = WebhookHandler(LINE1_SECRET)
-        handler.handle(body, signature)
-        current_secret = LINE1_SECRET
+        WebhookHandler(LINE1_SECRET).validate_signature(body, signature)
         current_token = LINE1_TOKEN
         current_sheet = LINE1_SHEET
-    except:
+    except InvalidSignatureError:
         try:
-            handler = WebhookHandler(LINE2_SECRET)
-            handler.handle(body, signature)
-            current_secret = LINE2_SECRET
+            WebhookHandler(LINE2_SECRET).validate_signature(body, signature)
             current_token = LINE2_TOKEN
             current_sheet = LINE2_SHEET
-        except:
+        except InvalidSignatureError:
             abort(400)
 
     events = json.loads(body)["events"]
 
     for event in events:
-
         if event["type"] == "message" and event["message"]["type"] == "text":
 
             user_text = event["message"]["text"]
@@ -181,8 +166,9 @@ def callback():
             rules = get_rules(current_sheet)
             reply = match_rules(user_text, rules)
 
+            line_bot_api = LineBotApi(current_token)
+
             if reply:
-                line_bot_api = LineBotApi(current_token)
                 line_bot_api.reply_message(
                     event["replyToken"],
                     TextSendMessage(text=reply)
