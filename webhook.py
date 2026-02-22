@@ -89,26 +89,29 @@ def match_rules(user_text, rules):
 
     for rule in rules:
 
-        must_keywords = [k.strip().lower() for k in rule["must"].split("&") if k.strip()]
-        any_keywords = [k.strip().lower() for k in rule["any"].split("|") if k.strip()]
+        must_keywords = [
+            k.strip().lower()
+            for k in rule["must"].split("&")
+            if k.strip()
+        ]
 
-        must_match = all(k in user_text for k in must_keywords) if must_keywords else False
-        any_match = any(k in user_text for k in any_keywords) if any_keywords else False
+        any_keywords = [
+            k.strip().lower()
+            for k in rule["any"].split(",")
+            if k.strip()
+        ]
 
-        if must_keywords and any_keywords:
-            if must_match and any_match:
+        # ===== AND 優先 =====
+        if must_keywords:
+            if all(k in user_text for k in must_keywords):
                 return rule["reply"]
 
-        elif must_keywords:
-            if must_match:
-                return rule["reply"]
-
+        # ===== 如果沒有 AND 才看 OR =====
         elif any_keywords:
-            if any_match:
+            if any(k in user_text for k in any_keywords):
                 return rule["reply"]
 
     return None
-
 # =============================
 # Webhook
 # =============================
