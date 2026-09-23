@@ -171,6 +171,9 @@ def callback():
                 TextSendMessage(text=reply)
             )
 
+    # LINE Webhook 必須收到 HTTP 200，否則會判定本次處理失敗。
+    return "OK", 200
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
